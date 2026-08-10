@@ -65,19 +65,23 @@ interface VoiceShape {
 }
 
 const EMOTION_VOICE: Record<Emotion, VoiceShape> = {
-  neutral: { rate: 1.0, pitch: 1.06, volume: 1 },
-  happy: { rate: 1.12, pitch: 1.28, volume: 1 },
-  surprised: { rate: 1.18, pitch: 1.42, volume: 1 },
-  confused: { rate: 0.94, pitch: 1.0, volume: 0.95 },
-  alert: { rate: 1.08, pitch: 0.94, volume: 1 },
-  sad: { rate: 0.86, pitch: 0.9, volume: 0.85 },
+  // Soft, warm, natural feminine delivery — unhurried, never shrill.
+  neutral: { rate: 0.92, pitch: 1.02, volume: 0.92 },
+  happy: { rate: 0.98, pitch: 1.12, volume: 0.95 },
+  surprised: { rate: 1.02, pitch: 1.2, volume: 0.96 },
+  confused: { rate: 0.88, pitch: 0.98, volume: 0.88 },
+  alert: { rate: 0.96, pitch: 0.96, volume: 0.94 },
+  sad: { rate: 0.82, pitch: 0.92, volume: 0.78 },
 };
 
 function pickVoice(): SpeechSynthesisVoice | null {
   const voices = window.speechSynthesis.getVoices();
   if (!voices.length) return null;
+  // Prefer natural/neural feminine voices before generic system ones.
   const preferred =
-    voices.find((v) => /google uk english female|samantha|ava|aria|zira|jenny/i.test(v.name)) ??
+    voices.find((v) => /(natural|neural).*(female|aria|jenny|ava|libby|sonia|emma)/i.test(v.name)) ??
+    voices.find((v) => /(aria|jenny|ava|libby|sonia|emma|samantha|serena|allison)/i.test(v.name)) ??
+    voices.find((v) => /google uk english female/i.test(v.name)) ??
     voices.find((v) => /female/i.test(v.name) && v.lang.startsWith("en")) ??
     voices.find((v) => v.lang.startsWith("en-GB")) ??
     voices.find((v) => v.lang.startsWith("en"));
@@ -97,7 +101,15 @@ let speakToken = 0;
 
 export function speak(
   text: string,
-  options: { emotion?: Emotion; onStart?: () => void; onEnd?: () => void } = {},
+  options: {
+    emotion?: Emotion;
+    onStart?: () => void;
+    onEnd?: () => void;
+    /** Fires when a new clause begins — use for subtitles. */
+    onCaption?: (clause: string) => void;
+    /** Fires per spoken word within the current clause. */
+    onWord?: (wordIndex: number) => void;
+  } = {},
 ): void {
   const clean = text.trim();
   if (!speechSupported() || !clean) {
@@ -129,15 +141,25 @@ export function speak(
     utterance.onstart = () => {
       if (token !== speakToken) return;
       startLevel();
+      options.onCaption?.(part);
+      options.onWord?.(0);
       if (!started) {
         started = true;
         options.onStart?.();
       }
     };
+    utterance.onboundary = (event: SpeechSynthesisEvent) => {
+      if (token !== speakToken) return;
+      if (event.name && event.name !== "word") return;
+      const spoken = part.slice(0, event.charIndex ?? 0);
+      const index = spoken.trim() ? spoken.trim().split(/\s+/).length : 0;
+      options.onWord?.(index);
+    };
     utterance.onend = () => {
       if (token !== speakToken) return;
       if (index === parts.length - 1) {
         stopLevel();
+        options.onCaption?.("");
         options.onEnd?.();
       }
     };
@@ -145,6 +167,7 @@ export function speak(
       if (token !== speakToken) return;
       if (index === parts.length - 1) {
         stopLevel();
+        options.onCaption?.("");
         options.onEnd?.();
       }
     };
