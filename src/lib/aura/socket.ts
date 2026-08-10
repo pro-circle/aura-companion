@@ -69,8 +69,9 @@ export function useAuraConnection() {
 
           if (data.speech_required && s.privacy.voice) {
             s.setAvatarState("speaking");
-            speak(data.response, {
+            void speak(data.response, {
               emotion: data.emotion,
+              intensity: data.priority === "high" ? 1 : data.priority === "low" ? 0.6 : 0.85,
               onCaption: (line) => useAuraStore.getState().setCaption(line),
               onWord: (index) => useAuraStore.getState().setCaptionWord(index),
               onEnd: () => {
