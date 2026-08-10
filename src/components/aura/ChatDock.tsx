@@ -22,6 +22,8 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
   const [interim, setInterim] = useState("");
   const [listening, setListening] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
 
   const streamRef = useRef<VoiceStream | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -171,7 +173,7 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
         </div>
 
         <form onSubmit={submit} className="mt-1 flex items-center gap-2">
-          {micEnabled && recognitionSupported() && (
+          {hydrated && micEnabled && recognitionSupported() && (
             <button
               type="button"
               onClick={listening ? stopListening : startListening}
