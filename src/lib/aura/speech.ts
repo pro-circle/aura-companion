@@ -66,26 +66,46 @@ interface VoiceShape {
 
 const EMOTION_VOICE: Record<Emotion, VoiceShape> = {
   // Soft, warm, natural feminine delivery — unhurried, never shrill.
-  neutral: { rate: 0.92, pitch: 1.02, volume: 0.92 },
-  happy: { rate: 0.98, pitch: 1.12, volume: 0.95 },
-  surprised: { rate: 1.02, pitch: 1.2, volume: 0.96 },
-  confused: { rate: 0.88, pitch: 0.98, volume: 0.88 },
-  alert: { rate: 0.96, pitch: 0.96, volume: 0.94 },
-  sad: { rate: 0.82, pitch: 0.92, volume: 0.78 },
+  // Pitch is kept above 1.0 so the timbre never reads masculine.
+  neutral: { rate: 0.92, pitch: 1.14, volume: 0.92 },
+  happy: { rate: 0.98, pitch: 1.24, volume: 0.95 },
+  surprised: { rate: 1.02, pitch: 1.32, volume: 0.96 },
+  confused: { rate: 0.88, pitch: 1.1, volume: 0.88 },
+  alert: { rate: 0.96, pitch: 1.08, volume: 0.94 },
+  sad: { rate: 0.82, pitch: 1.04, volume: 0.78 },
 };
 
+/** Names that are definitely male — never use these. */
+const MALE_NAMES =
+  /(male\b|\bman\b|david|mark|guy|george|james|ryan|daniel|alex(?!a)|fred|thomas|william|christopher|eric|arthur|oliver|liam|brian|paul|tom|john|matthew|aaron|roger|steffan|rishi|prabhat|gordon|junior|reed|onyx|echo|ash)/i;
+/** Names that are known feminine voices across platforms. */
+const FEMALE_NAMES =
+  /(female|woman|aria|jenny|ava|libby|sonia|emma|michelle|amber|ana|nova|shimmer|samantha|serena|allison|susan|karen|moira|tessa|fiona|victoria|zira|hazel|catherine|linda|nanami|neerja|heera|kalpana|swara|joanna|salli|kendra|kimberly|ivy|amy|lucia|elsa)/i;
+
+let cachedVoice: SpeechSynthesisVoice | null = null;
+
 function pickVoice(): SpeechSynthesisVoice | null {
+  if (cachedVoice) return cachedVoice;
   const voices = window.speechSynthesis.getVoices();
   if (!voices.length) return null;
-  // Prefer natural/neural feminine voices before generic system ones.
+
+  const english = voices.filter((v) => /^en/i.test(v.lang));
+  const pool = english.length ? english : voices;
+  const feminine = pool.filter((v) => FEMALE_NAMES.test(v.name) && !MALE_NAMES.test(v.name));
+  const notMale = pool.filter((v) => !MALE_NAMES.test(v.name));
+
   const preferred =
-    voices.find((v) => /(natural|neural).*(female|aria|jenny|ava|libby|sonia|emma)/i.test(v.name)) ??
-    voices.find((v) => /(aria|jenny|ava|libby|sonia|emma|samantha|serena|allison)/i.test(v.name)) ??
-    voices.find((v) => /google uk english female/i.test(v.name)) ??
-    voices.find((v) => /female/i.test(v.name) && v.lang.startsWith("en")) ??
-    voices.find((v) => v.lang.startsWith("en-GB")) ??
-    voices.find((v) => v.lang.startsWith("en"));
-  return preferred ?? voices[0] ?? null;
+    // natural / neural feminine first
+    feminine.find((v) => /(natural|neural|online)/i.test(v.name)) ??
+    feminine.find((v) => /^en-US/i.test(v.lang)) ??
+    feminine[0] ??
+    notMale.find((v) => /google (uk|us) english/i.test(v.name)) ??
+    notMale[0] ??
+    pool[0] ??
+    null;
+
+  cachedVoice = preferred ?? null;
+  return cachedVoice;
 }
 
 /** Split into clauses so we can vary tone across a sentence (less robotic). */
@@ -133,8 +153,8 @@ export function speak(
     const exclaim = /!$/.test(part);
     utterance.rate = shape.rate + drift * 0.03 + (exclaim ? 0.05 : 0);
     utterance.pitch = Math.max(
-      0.1,
-      shape.pitch + drift * 0.05 + (question ? 0.16 : 0) + (exclaim ? 0.1 : 0),
+      1.02,
+      shape.pitch + drift * 0.04 + (question ? 0.14 : 0) + (exclaim ? 0.08 : 0),
     );
     utterance.volume = shape.volume;
 
@@ -189,7 +209,10 @@ export function isSpeaking(): boolean {
 // Warm the voice list up early (Chrome loads it asynchronously).
 if (typeof window !== "undefined" && "speechSynthesis" in window) {
   window.speechSynthesis.getVoices();
-  window.speechSynthesis.onvoiceschanged = () => window.speechSynthesis.getVoices();
+  window.speechSynthesis.onvoiceschanged = () => {
+    cachedVoice = null; // re-pick once the full voice list arrives
+    window.speechSynthesis.getVoices();
+  };
 }
 
 /* ---------------------------------------------------------------------- STT */
