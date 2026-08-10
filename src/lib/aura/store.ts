@@ -26,6 +26,10 @@ interface AuraStore {
   pool: PoolStatus | null;
   privacy: PrivacySettings;
   lastError: string | null;
+  /** Live subtitle line the avatar is currently speaking. */
+  caption: string;
+  /** Index of the word being spoken within the caption. */
+  captionWord: number;
 
   setConnection: (state: ConnectionState) => void;
   setAvatarState: (state: AvatarState) => void;
@@ -36,6 +40,8 @@ interface AuraStore {
   setPool: (pool: PoolStatus | null) => void;
   togglePrivacy: (key: keyof PrivacySettings) => void;
   setError: (message: string | null) => void;
+  setCaption: (caption: string) => void;
+  setCaptionWord: (index: number) => void;
 }
 
 const emptyContext: SceneContext = {
@@ -69,6 +75,8 @@ export const useAuraStore = create<AuraStore>((set) => ({
     voice: true,
   },
   lastError: null,
+  caption: "",
+  captionWord: 0,
 
   setConnection: (connection) => set({ connection }),
   setAvatarState: (avatarState) => set({ avatarState }),
@@ -83,4 +91,6 @@ export const useAuraStore = create<AuraStore>((set) => ({
   togglePrivacy: (key) =>
     set((state) => ({ privacy: { ...state.privacy, [key]: !state.privacy[key] } })),
   setError: (lastError) => set({ lastError }),
+  setCaption: (caption) => set({ caption, captionWord: 0 }),
+  setCaptionWord: (captionWord) => set({ captionWord }),
 }));
