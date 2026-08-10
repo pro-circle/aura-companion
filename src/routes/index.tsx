@@ -4,7 +4,9 @@ import { Suspense, lazy, useEffect, useState } from "react";
 import { BackendNotice } from "@/components/aura/BackendNotice";
 import { ChatDock } from "@/components/aura/ChatDock";
 import { SideDock } from "@/components/aura/SideDock";
+import { Subtitles } from "@/components/aura/Subtitles";
 import { useAuraConnection } from "@/lib/aura/socket";
+import { useCamera } from "@/lib/aura/useCamera";
 import { themeForHour, themeVars, type DayTheme } from "@/lib/aura/theme";
 import { useSensors } from "@/lib/aura/useSensors";
 import { useCursorMood } from "@/lib/aura/useCursorMood";
@@ -46,6 +48,7 @@ function AuraPage() {
   useSensors(sendContext);
   useCursorMood();
   const theme = useDayTheme();
+  const shot = useCamera();
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -62,7 +65,15 @@ function AuraPage() {
 
       {/* avatar fills the view */}
       <div className="absolute inset-0 flex items-end justify-center pb-[9rem] md:pb-[9.5rem]">
-        <div className="h-[80vh] w-full max-w-[min(94vw,720px)] translate-y-[4vh]">
+        <div
+          className="h-[80vh] w-full max-w-[min(94vw,720px)] will-change-transform"
+          style={{
+            transform: `translate3d(${shot.x}%, calc(4vh + ${shot.y}%), 0) scale(${shot.scale})`,
+            transformOrigin: "50% 38%",
+            transition: `transform ${shot.duration}s cubic-bezier(0.22, 0.61, 0.36, 1)`,
+          }}
+          data-shot={shot.label}
+        >
 
           {mounted && (
             <Suspense fallback={null}>
@@ -73,6 +84,8 @@ function AuraPage() {
       </div>
 
       <SideDock />
+
+      <Subtitles />
 
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
         <BackendNotice />

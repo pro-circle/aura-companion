@@ -71,9 +71,16 @@ export function useAuraConnection() {
             s.setAvatarState("speaking");
             speak(data.response, {
               emotion: data.emotion,
-              onEnd: () => useAuraStore.getState().setAvatarState("idle"),
+              onCaption: (line) => useAuraStore.getState().setCaption(line),
+              onWord: (index) => useAuraStore.getState().setCaptionWord(index),
+              onEnd: () => {
+                const st = useAuraStore.getState();
+                st.setCaption("");
+                st.setAvatarState("idle");
+              },
             });
           } else {
+            s.setCaption("");
             s.setAvatarState("idle");
           }
         }
@@ -123,6 +130,7 @@ export function useAuraConnection() {
     }
     stopSpeaking();
     store.setAvatarState("thinking");
+    store.setCaption("");
     socket.send(
       JSON.stringify({ type: "message", text: trimmed, context: store.context }),
     );
