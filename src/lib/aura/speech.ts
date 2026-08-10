@@ -1,12 +1,30 @@
 /**
- * Browser Web Speech helpers — free, zero-latency, no API key.
+ * Speech facade.
  *
- * TTS: emotion-aware voice shaping (rate / pitch / volume + clause pacing)
- *      and a live "speech level" signal the avatar uses for lip sync.
- * STT: continuous streaming recognition with interim transcripts.
+ * TTS now lives in `./voice` (modular local engines + emotional prosody
+ * pipeline + Web Audio graph); this module re-exports it so existing callers
+ * keep working, and owns the streaming speech-recognition side.
  */
 
-import type { Emotion } from "./types";
+import { activeEngine } from "./voice/engine";
+
+export { speak, stopSpeaking, isSpeaking } from "./voice";
+export type { SpeakOptions } from "./voice";
+
+export function speechSupported(): boolean {
+  return typeof window !== "undefined" && "speechSynthesis" in window;
+}
+
+export function recognitionSupported(): boolean {
+  if (typeof window === "undefined") return false;
+  const w = window as any;
+  return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
+}
+
+/** 0..1 mouth-openness envelope from the active voice engine. */
+export function getSpeechLevel(): number {
+  return activeEngine()?.level() ?? 0;
+}
 
 type RecognitionLike = {
   lang: string;
@@ -21,199 +39,6 @@ type RecognitionLike = {
   onend: (() => void) | null;
   onstart?: (() => void) | null;
 };
-
-export function speechSupported(): boolean {
-  return typeof window !== "undefined" && "speechSynthesis" in window;
-}
-
-export function recognitionSupported(): boolean {
-  if (typeof window === "undefined") return false;
-  const w = window as any;
-  return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
-}
-
-/* ------------------------------------------------------------------ lip sync */
-
-let speechLevel = 0;
-let levelTimer: ReturnType<typeof setInterval> | null = null;
-
-/** 0..1 mouth-openness envelope, driven by the utterance's progress. */
-export function getSpeechLevel(): number {
-  return speechLevel;
-}
-
-function startLevel() {
-  stopLevel();
-  levelTimer = setInterval(() => {
-    // Web Speech gives no PCM, so synthesise a natural syllabic envelope.
-    speechLevel = 0.45 + Math.random() * 0.55;
-  }, 90);
-}
-
-function stopLevel() {
-  if (levelTimer) clearInterval(levelTimer);
-  levelTimer = null;
-  speechLevel = 0;
-}
-
-/* ---------------------------------------------------------------------- TTS */
-
-interface VoiceShape {
-  rate: number;
-  pitch: number;
-  volume: number;
-}
-
-const EMOTION_VOICE: Record<Emotion, VoiceShape> = {
-  // Soft, warm, natural feminine delivery — unhurried, never shrill.
-  // Pitch is kept above 1.0 so the timbre never reads masculine.
-  neutral: { rate: 0.92, pitch: 1.14, volume: 0.92 },
-  happy: { rate: 0.98, pitch: 1.24, volume: 0.95 },
-  surprised: { rate: 1.02, pitch: 1.32, volume: 0.96 },
-  confused: { rate: 0.88, pitch: 1.1, volume: 0.88 },
-  alert: { rate: 0.96, pitch: 1.08, volume: 0.94 },
-  sad: { rate: 0.82, pitch: 1.04, volume: 0.78 },
-};
-
-/** Names that are definitely male — never use these. */
-const MALE_NAMES =
-  /(male\b|\bman\b|david|mark|guy|george|james|ryan|daniel|alex(?!a)|fred|thomas|william|christopher|eric|arthur|oliver|liam|brian|paul|tom|john|matthew|aaron|roger|steffan|rishi|prabhat|gordon|junior|reed|onyx|echo|ash)/i;
-/** Names that are known feminine voices across platforms. */
-const FEMALE_NAMES =
-  /(female|woman|aria|jenny|ava|libby|sonia|emma|michelle|amber|ana|nova|shimmer|samantha|serena|allison|susan|karen|moira|tessa|fiona|victoria|zira|hazel|catherine|linda|nanami|neerja|heera|kalpana|swara|joanna|salli|kendra|kimberly|ivy|amy|lucia|elsa)/i;
-
-let cachedVoice: SpeechSynthesisVoice | null = null;
-
-function pickVoice(): SpeechSynthesisVoice | null {
-  if (cachedVoice) return cachedVoice;
-  const voices = window.speechSynthesis.getVoices();
-  if (!voices.length) return null;
-
-  const english = voices.filter((v) => /^en/i.test(v.lang));
-  const pool = english.length ? english : voices;
-  const feminine = pool.filter((v) => FEMALE_NAMES.test(v.name) && !MALE_NAMES.test(v.name));
-  const notMale = pool.filter((v) => !MALE_NAMES.test(v.name));
-
-  const preferred =
-    // natural / neural feminine first
-    feminine.find((v) => /(natural|neural|online)/i.test(v.name)) ??
-    feminine.find((v) => /^en-US/i.test(v.lang)) ??
-    feminine[0] ??
-    notMale.find((v) => /google (uk|us) english/i.test(v.name)) ??
-    notMale[0] ??
-    pool[0] ??
-    null;
-
-  cachedVoice = preferred ?? null;
-  return cachedVoice;
-}
-
-/** Split into clauses so we can vary tone across a sentence (less robotic). */
-function clauses(text: string): string[] {
-  return text
-    .replace(/[*_`#>]/g, "")
-    .split(/(?<=[.!?,;:—])\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-let speakToken = 0;
-
-export function speak(
-  text: string,
-  options: {
-    emotion?: Emotion;
-    onStart?: () => void;
-    onEnd?: () => void;
-    /** Fires when a new clause begins — use for subtitles. */
-    onCaption?: (clause: string) => void;
-    /** Fires per spoken word within the current clause. */
-    onWord?: (wordIndex: number) => void;
-  } = {},
-): void {
-  const clean = text.trim();
-  if (!speechSupported() || !clean) {
-    options.onEnd?.();
-    return;
-  }
-
-  stopSpeaking();
-  const token = ++speakToken;
-  const shape = EMOTION_VOICE[options.emotion ?? "neutral"];
-  const voice = pickVoice();
-  const parts = clauses(clean);
-  let started = false;
-
-  parts.forEach((part, index) => {
-    const utterance = new SpeechSynthesisUtterance(part);
-    if (voice) utterance.voice = voice;
-    // Micro-variation per clause keeps the delivery human.
-    const drift = (index % 3) - 1;
-    const question = /\?$/.test(part);
-    const exclaim = /!$/.test(part);
-    utterance.rate = shape.rate + drift * 0.03 + (exclaim ? 0.05 : 0);
-    utterance.pitch = Math.max(
-      1.02,
-      shape.pitch + drift * 0.04 + (question ? 0.14 : 0) + (exclaim ? 0.08 : 0),
-    );
-    utterance.volume = shape.volume;
-
-    utterance.onstart = () => {
-      if (token !== speakToken) return;
-      startLevel();
-      options.onCaption?.(part);
-      options.onWord?.(0);
-      if (!started) {
-        started = true;
-        options.onStart?.();
-      }
-    };
-    utterance.onboundary = (event: SpeechSynthesisEvent) => {
-      if (token !== speakToken) return;
-      if (event.name && event.name !== "word") return;
-      const spoken = part.slice(0, event.charIndex ?? 0);
-      const index = spoken.trim() ? spoken.trim().split(/\s+/).length : 0;
-      options.onWord?.(index);
-    };
-    utterance.onend = () => {
-      if (token !== speakToken) return;
-      if (index === parts.length - 1) {
-        stopLevel();
-        options.onCaption?.("");
-        options.onEnd?.();
-      }
-    };
-    utterance.onerror = () => {
-      if (token !== speakToken) return;
-      if (index === parts.length - 1) {
-        stopLevel();
-        options.onCaption?.("");
-        options.onEnd?.();
-      }
-    };
-
-    window.speechSynthesis.speak(utterance);
-  });
-}
-
-export function stopSpeaking(): void {
-  speakToken += 1;
-  stopLevel();
-  if (speechSupported()) window.speechSynthesis.cancel();
-}
-
-export function isSpeaking(): boolean {
-  return speechSupported() && window.speechSynthesis.speaking;
-}
-
-// Warm the voice list up early (Chrome loads it asynchronously).
-if (typeof window !== "undefined" && "speechSynthesis" in window) {
-  window.speechSynthesis.getVoices();
-  window.speechSynthesis.onvoiceschanged = () => {
-    cachedVoice = null; // re-pick once the full voice list arrives
-    window.speechSynthesis.getVoices();
-  };
-}
 
 /* ---------------------------------------------------------------------- STT */
 

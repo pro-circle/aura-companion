@@ -1,45 +1,106 @@
+import { useEffect, type RefObject } from "react";
+
+import { rig } from "./rig/rig";
+import { Noise1D, damp, rand } from "./rig/math";
 import { useAuraStore } from "./store";
 
-export interface CameraShot {
+export type ShotName =
+  | "WIDE"
+  | "NORMAL"
+  | "MEDIUM"
+  | "CLOSEUP"
+  | "EMOTIONAL_CLOSEUP"
+  | "GESTURE_VIEW";
+
+interface Shot {
   scale: number;
   x: number;
   y: number;
-  /** Seconds — slow pushes feel cinematic, reactions snap faster. */
-  duration: number;
-  label: string;
+  /** How fast the camera eases toward this framing. */
+  rate: number;
 }
 
+const SHOTS: Record<ShotName, Shot> = {
+  WIDE: { scale: 1.0, x: 0, y: 0, rate: 0.7 },
+  NORMAL: { scale: 1.1, x: 0, y: -1, rate: 0.9 },
+  MEDIUM: { scale: 1.18, x: 0, y: -2, rate: 1.1 },
+  CLOSEUP: { scale: 1.34, x: 0, y: -3.5, rate: 1.3 },
+  EMOTIONAL_CLOSEUP: { scale: 1.52, x: 0, y: -5, rate: 2.4 },
+  GESTURE_VIEW: { scale: 1.08, x: 0, y: -0.5, rate: 1.6 },
+};
+
+const BIG_EMOTION = new Set(["surprised", "excited", "angry", "sad", "embarrassed"]);
+
 /**
- * Virtual camera: picks a shot from the live scenario (what AURA is doing,
- * how she feels, whether someone is in frame) and eases between them.
+ * Cinematic camera controller. Picks a framing from the live scenario and
+ * eases toward it every frame, with a permanent handheld drift so the shot
+ * never feels locked off.
  */
-export function useCamera(): CameraShot {
-  const avatarState = useAuraStore((s) => s.avatarState);
-  const emotion = useAuraStore((s) => s.emotion);
-  const facePresent = useAuraStore((s) => s.context.face_present);
-  const people = useAuraStore((s) => s.context.people);
+export function useCameraRig(target: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const drift = new Noise1D(3, 21.7);
+    const driftY = new Noise1D(3, 77.3);
+    let frame = 0;
+    let last = performance.now();
+    let t = 0;
+    const cur = { scale: 1, x: 0, y: 0 };
+    let shake = 0;
+    let lastEmotion = useAuraStore.getState().emotion;
 
-  // Wide establishing shot when nothing is happening.
-  let shot: CameraShot = { scale: 1, x: 0, y: 0, duration: 4.5, label: "wide" };
+    const unsub = useAuraStore.subscribe((state) => {
+      if (state.emotion !== lastEmotion) {
+        lastEmotion = state.emotion;
+        // Quick (but smooth) punch-in on a strong emotional turn.
+        if (BIG_EMOTION.has(lastEmotion)) shake = 1;
+      }
+    });
 
-  if (avatarState === "listening") {
-    shot = { scale: 1.12, x: 0, y: -1.5, duration: 3.2, label: "medium" };
-  }
-  if (avatarState === "thinking") {
-    shot = { scale: 1.06, x: 2.5, y: -1, duration: 3.8, label: "drift" };
-  }
-  if (avatarState === "speaking") {
-    shot = { scale: 1.28, x: 0, y: -3, duration: 2.6, label: "close-up" };
-    if (emotion === "surprised") shot = { scale: 1.5, x: 0, y: -4.5, duration: 0.9, label: "punch-in" };
-    if (emotion === "happy") shot = { scale: 1.34, x: -1, y: -3.5, duration: 2, label: "warm close" };
-    if (emotion === "sad") shot = { scale: 1.18, x: 1.5, y: -1.5, duration: 4.2, label: "slow pull" };
-    if (emotion === "alert") shot = { scale: 1.42, x: 0, y: -3.5, duration: 1.2, label: "tight" };
-  }
+    const pick = (): ShotName => {
+      const s = useAuraStore.getState();
+      const gesturing = Math.abs(rig.pose.arms.rightArm) + Math.abs(rig.pose.arms.leftArm) > 26;
+      if (gesturing) return "GESTURE_VIEW";
+      if (s.avatarState === "speaking") {
+        return BIG_EMOTION.has(s.emotion) && shake > 0.2 ? "EMOTIONAL_CLOSEUP" : "CLOSEUP";
+      }
+      if (s.avatarState === "listening") return "MEDIUM";
+      if (s.avatarState === "thinking") return "NORMAL";
+      return s.context.face_present || s.context.people > 0 ? "MEDIUM" : "WIDE";
+    };
 
-  // Someone in frame? Sit a touch closer and more intimate.
-  if (facePresent || people > 0) {
-    shot = { ...shot, scale: shot.scale + 0.06, y: shot.y - 1 };
-  }
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      t += dt;
+      shake = damp(shake, 0, dt, 1.1);
 
-  return shot;
+      const shot = SHOTS[pick()];
+      const rate = shot.rate * (1 + shake * 1.6);
+      // Handheld life: slow noise + breathing-coupled bob.
+      const wobbleX = drift.at(t * 0.12) * 1.1 + rig.pose.bodySway * 0.06;
+      const wobbleY = driftY.at(t * 0.1) * 0.9 + rig.pose.breath * 0.05;
+      const punch = shake * 0.06;
+
+      cur.scale = damp(cur.scale, shot.scale + punch, dt, rate);
+      cur.x = damp(cur.x, shot.x + wobbleX, dt, rate);
+      cur.y = damp(cur.y, shot.y + wobbleY, dt, rate);
+
+      const el = target.current;
+      if (el) {
+        el.style.transform =
+          `translate3d(${cur.x.toFixed(3)}%, calc(4vh + ${cur.y.toFixed(3)}%), 0) scale(${cur.scale.toFixed(4)})`;
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(frame);
+      unsub();
+    };
+  }, [target]);
+}
+
+/** Occasional whip of energy the demo mode can trigger. */
+export function cameraJolt() {
+  rig.gesture("beat", rand(0.5, 0.9));
 }

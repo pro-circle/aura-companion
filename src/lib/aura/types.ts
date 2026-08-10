@@ -1,12 +1,27 @@
 export type AvatarState = "idle" | "listening" | "thinking" | "speaking";
 
-export type Emotion =
+/** Emotions the backend can send (kept in sync with backend/app/schemas.py). */
+export type BackendEmotion =
   | "neutral"
   | "happy"
   | "surprised"
   | "confused"
   | "alert"
   | "sad";
+
+/** Full expressive palette the rig + voice can perform locally. */
+export type Emotion =
+  | BackendEmotion
+  | "excited"
+  | "embarrassed"
+  | "shy"
+  | "angry"
+  | "worried"
+  | "sleepy"
+  | "curious"
+  | "playful"
+  | "thinking"
+  | "proud";
 
 export type ConnectionState =
   | "connecting"
@@ -75,6 +90,16 @@ export const EMOTION_COLOR: Record<Emotion, string> = {
   confused: "#c08bff",
   alert: "#ffb15c",
   sad: "#6f8bd6",
+  excited: "#ffd166",
+  embarrassed: "#ff9db3",
+  shy: "#ffb3c9",
+  angry: "#ff6b6b",
+  worried: "#9aa7d6",
+  sleepy: "#8f8fb0",
+  curious: "#7fd1ff",
+  playful: "#a78bfa",
+  thinking: "#9db7d6",
+  proud: "#f2c14e",
 };
 
 export const BACKEND_URL =

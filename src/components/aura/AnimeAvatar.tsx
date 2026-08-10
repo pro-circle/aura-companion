@@ -1,91 +1,74 @@
 import { useEffect, useMemo, useRef } from "react";
 
 import { useAuraStore } from "@/lib/aura/store";
-import { getSpeechLevel } from "@/lib/aura/speech";
-import type { AvatarState, Emotion } from "@/lib/aura/types";
+import { IRIS } from "@/lib/aura/rig/emotions";
+import { rig } from "@/lib/aura/rig/rig";
+import { clamp } from "@/lib/aura/rig/math";
 
 /**
- * Hand-rigged anime avatar (pure SVG + rAF) styled after the reference frames:
- * chin-length blue-black bob, soft grey eyes with big catchlights, warm blush,
- * yellow cardigan over a pale inner top.
+ * Layered anime avatar renderer.
  *
- * Body language layer: breathing, weight shifts, shoulder rise, head nods on
- * stressed syllables, lean-in while listening, recoil on surprise, and a
- * gesturing right hand that punctuates speech.
+ * Every body part is an independently transformed SVG layer (back hair, side
+ * hair, bangs, face, brows, lids, iris, pupils, mouth, teeth, tongue, neck,
+ * torso, arms, hands, clothes). The component owns no animation logic: it
+ * runs one rAF loop, asks `rig` for the blended pose and writes attributes
+ * directly to the DOM, so React never re-renders during animation.
  */
-
-interface Pose {
-  brow: number; // -1 worried/angled .. 1 raised
-  browY: number;
-  eyeOpen: number; // 0..1.2
-  smile: number; // -1 sad .. 1 grin
-  blush: number; // 0..1
-  pupil: number; // scale
-  lean: number; // -1 pull back .. 1 lean in
-  shoulder: number; // 0..1 raised
-  gesture: number; // 0..1 hand animation amount
-}
-
-const POSE: Record<Emotion, Pose> = {
-  neutral: { brow: 0.05, browY: 0, eyeOpen: 1, smile: 0.3, blush: 0.5, pupil: 1, lean: 0.1, shoulder: 0.1, gesture: 0.35 },
-  happy: { brow: 0.45, browY: -2, eyeOpen: 0.92, smile: 1, blush: 0.85, pupil: 1.05, lean: 0.45, shoulder: 0.3, gesture: 0.9 },
-  surprised: { brow: 1, browY: -7, eyeOpen: 1.2, smile: 0.2, blush: 0.6, pupil: 1.16, lean: -0.6, shoulder: 0.7, gesture: 0.6 },
-  confused: { brow: -0.5, browY: -1, eyeOpen: 0.96, smile: -0.1, blush: 0.5, pupil: 0.98, lean: -0.15, shoulder: 0.25, gesture: 0.5 },
-  alert: { brow: -0.75, browY: -3, eyeOpen: 1.1, smile: 0.05, blush: 0.35, pupil: 0.9, lean: 0.5, shoulder: 0.45, gesture: 0.65 },
-  sad: { brow: -0.95, browY: 3, eyeOpen: 0.82, smile: -0.55, blush: 0.55, pupil: 1.02, lean: -0.3, shoulder: -0.2, gesture: 0.12 },
-};
-
-/** Soft grey-brown irises, tinted subtly per emotion (matches the reference). */
-const IRIS: Record<Emotion, [string, string]> = {
-  neutral: ["#b9bdc4", "#4b4f58"],
-  happy: ["#c6c9cf", "#55585f"],
-  surprised: ["#c9ccd3", "#3f434b"],
-  confused: ["#bcb9c6", "#4e4a5a"],
-  alert: ["#c8bfb2", "#5b5045"],
-  sad: ["#b3b9c6", "#474d5b"],
-};
-
-function damp(current: number, target: number, dt: number, rate = 8) {
-  return current + (target - current) * Math.min(1, dt * rate);
-}
-
 export default function AnimeAvatar() {
   const avatarState = useAuraStore((s) => s.avatarState);
   const emotion = useAuraStore((s) => s.emotion);
 
-  const stateRef = useRef<AvatarState>(avatarState);
-  const emotionRef = useRef<Emotion>(emotion);
-  stateRef.current = avatarState;
-  emotionRef.current = emotion;
-
-  const root = useRef<SVGSVGElement>(null);
+  const svg = useRef<SVGSVGElement>(null);
   const stage = useRef<SVGGElement>(null);
-  const head = useRef<SVGGElement>(null);
-  const body = useRef<SVGGElement>(null);
-  const hairL = useRef<SVGGElement>(null);
-  const hairR = useRef<SVGGElement>(null);
+  const bodyG = useRef<SVGGElement>(null);
+  const torso = useRef<SVGGElement>(null);
+  const shoulders = useRef<SVGGElement>(null);
+  const neck = useRef<SVGGElement>(null);
+  const headG = useRef<SVGGElement>(null);
+  const faceG = useRef<SVGGElement>(null);
+  const hairBackG = useRef<SVGGElement>(null);
+  const hairSideL = useRef<SVGGElement>(null);
+  const hairSideR = useRef<SVGGElement>(null);
   const bangs = useRef<SVGGElement>(null);
   const lidL = useRef<SVGGElement>(null);
   const lidR = useRef<SVGGElement>(null);
-  const pupils = useRef<SVGGElement>(null);
-  const pupilsR = useRef<SVGGElement>(null);
+  const lowLidL = useRef<SVGGElement>(null);
+  const lowLidR = useRef<SVGGElement>(null);
+  const irisL = useRef<SVGGElement>(null);
+  const irisR = useRef<SVGGElement>(null);
+  const pupilL = useRef<SVGEllipseElement>(null);
+  const pupilR = useRef<SVGEllipseElement>(null);
   const browL = useRef<SVGGElement>(null);
   const browR = useRef<SVGGElement>(null);
-  const mouth = useRef<SVGGElement>(null);
-  const mouthOpen = useRef<SVGPathElement>(null);
+  const mouthG = useRef<SVGGElement>(null);
+  const mouthInner = useRef<SVGPathElement>(null);
   const mouthLine = useRef<SVGPathElement>(null);
+  const upperLip = useRef<SVGPathElement>(null);
   const teeth = useRef<SVGPathElement>(null);
+  const tongue = useRef<SVGEllipseElement>(null);
   const blushG = useRef<SVGGElement>(null);
-  const armR = useRef<SVGGElement>(null);
-  const armL = useRef<SVGGElement>(null);
-  const shoulders = useRef<SVGGElement>(null);
+  const armLG = useRef<SVGGElement>(null);
+  const armRG = useRef<SVGGElement>(null);
+  const foreArmL = useRef<SVGGElement>(null);
+  const foreArmR = useRef<SVGGElement>(null);
+  const handL = useRef<SVGGElement>(null);
+  const handR = useRef<SVGGElement>(null);
 
-  const pointer = useRef({ x: 0, y: 0 });
+  // Push conversational state into the rig (it owns all timing).
+  useEffect(() => {
+    rig.setState(avatarState);
+  }, [avatarState]);
+
+  useEffect(() => {
+    rig.setEmotion(emotion, 0.85);
+  }, [emotion]);
 
   useEffect(() => {
     const onMove = (event: PointerEvent) => {
-      pointer.current.x = (event.clientX / window.innerWidth) * 2 - 1;
-      pointer.current.y = (event.clientY / window.innerHeight) * 2 - 1;
+      rig.setPointer(
+        (event.clientX / window.innerWidth) * 2 - 1,
+        (event.clientY / window.innerHeight) * 2 - 1,
+      );
     };
     window.addEventListener("pointermove", onMove);
     return () => window.removeEventListener("pointermove", onMove);
@@ -94,163 +77,129 @@ export default function AnimeAvatar() {
   useEffect(() => {
     let frame = 0;
     let last = performance.now();
-    let blinkAt = performance.now() + 1200;
-    let blink = 0;
-    let blinkPhase: "none" | "close" | "open" = "none";
-    // idle "acting" beats: occasional nods, weight shifts, glances
-    let beatAt = performance.now() + 2600;
-    let beat = { nod: 0, shift: 0 };
 
-    const cur = {
-      turn: 0, tilt: 0, hair: 0, open: 1, smile: 0.3, brow: 0, browY: 0,
-      mouth: 0, blush: 0.3, lean: 0, shoulder: 0, gesture: 0, nod: 0, shift: 0,
+    const set = (el: Element | null, attr: string, value: string) => {
+      el?.setAttribute(attr, value);
     };
 
     const tick = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
+      const dt = (now - last) / 1000;
       last = now;
-      const t = now / 1000;
-      const state = stateRef.current;
-      const pose = POSE[emotionRef.current];
-      const speaking = state === "speaking";
-      const listening = state === "listening";
-      const thinking = state === "thinking";
-      const level = speaking ? getSpeechLevel() : 0;
+      const p = rig.update(dt);
 
-      // --- idle acting beats -------------------------------------------------
-      if (now > beatAt) {
-        beat = {
-          nod: (Math.random() - 0.3) * (speaking ? 3.5 : 2),
-          shift: (Math.random() - 0.5) * 6,
-        };
-        beatAt = now + (speaking ? 900 : 2600) + Math.random() * 2200;
-      }
-      cur.nod = damp(cur.nod, beat.nod + (speaking ? level * 2.2 : 0), dt, 3);
-      cur.shift = damp(cur.shift, beat.shift, dt, 1.2);
-
-      // --- head look ---------------------------------------------------------
-      const idleTurn = Math.sin(t * 0.42) * 3 + Math.sin(t * 0.17) * 2;
-      const targetTurn = idleTurn + pointer.current.x * 7 + cur.shift * 0.4;
-      const targetTilt =
-        Math.sin(t * 0.31) * 1.6 + pointer.current.y * 3 + (thinking ? 5 : 0) + cur.nod * 0.8;
-      cur.turn = damp(cur.turn, targetTurn, dt, 3.2);
-      cur.tilt = damp(cur.tilt, targetTilt, dt, 3);
-      cur.hair = damp(cur.hair, cur.turn, dt, 1.5);
-      const lag = cur.turn - cur.hair;
-
-      const breathe = Math.sin(t * 1.15) * 1.6 + (speaking ? Math.sin(t * 3) * 0.7 : 0);
-
-      // --- lean / weight shift (whole stage) ---------------------------------
-      cur.lean = damp(cur.lean, pose.lean + (listening ? 0.45 : 0) + (speaking ? 0.2 : 0), dt, 2.2);
-      const leanZ = 1 + cur.lean * 0.045;
-      stage.current?.setAttribute(
-        "transform",
-        `translate(200 300) scale(${leanZ}) translate(-200 -300) translate(${cur.shift * 0.5} ${-cur.lean * 6})`,
+      /* ---- camera-ish stage: lean pushes her toward the lens ------------- */
+      const zoom = 1 + p.lean * 0.04;
+      set(
+        stage.current, "transform",
+        `translate(200 300) scale(${zoom.toFixed(4)}) translate(-200 -300) ` +
+        `translate(${(p.bodySway * 0.5).toFixed(2)} ${(-p.lean * 5).toFixed(2)})`,
       );
 
-      if (head.current) {
-        head.current.setAttribute(
-          "transform",
-          `translate(200 200) rotate(${cur.tilt * 0.6}) translate(${cur.turn * 1.5} ${breathe * 0.5 + cur.nod * 1.4}) translate(-200 -200)`,
-        );
-      }
-      if (body.current) {
-        body.current.setAttribute(
-          "transform",
-          `translate(${cur.turn * 0.5} ${breathe}) rotate(${cur.tilt * 0.15} 200 460)`,
-        );
-      }
-      cur.shoulder = damp(cur.shoulder, pose.shoulder + (speaking ? 0.12 : 0), dt, 4);
-      shoulders.current?.setAttribute("transform", `translate(0 ${-cur.shoulder * 7})`);
-
-      const sway = Math.sin(t * 0.8) * 1.4;
-      hairL.current?.setAttribute(
-        "transform",
-        `rotate(${-lag * 0.9 + sway} 130 160) translate(${cur.hair * 0.9} 0)`,
+      /* ---- torso / shoulders --------------------------------------------- */
+      set(
+        torso.current, "transform",
+        `translate(${(p.bodySway * 0.6).toFixed(2)} ${p.breath.toFixed(2)}) ` +
+        `rotate(${(p.headTilt * 0.12).toFixed(2)} 200 470)`,
       );
-      hairR.current?.setAttribute(
-        "transform",
-        `rotate(${-lag * 0.9 - sway} 270 160) translate(${cur.hair * 0.9} 0)`,
-      );
-      bangs.current?.setAttribute(
-        "transform",
-        `translate(${cur.turn * 0.9 - lag * 0.6} ${Math.sin(t * 1.3) * 0.8})`,
+      set(shoulders.current, "transform", `translate(0 ${(-p.shoulder).toFixed(2)})`);
+      set(
+        neck.current, "transform",
+        `rotate(${(p.headTilt * 0.35).toFixed(2)} 200 300) translate(${(p.headTurn * 0.5).toFixed(2)} 0)`,
       );
 
-      // --- gesturing hands ---------------------------------------------------
-      cur.gesture = damp(cur.gesture, speaking ? pose.gesture : pose.gesture * 0.25, dt, 2.5);
-      const g = cur.gesture;
-      const gr = Math.sin(t * 2.1) * 8 * g + level * 5 * g;
-      const gl = Math.sin(t * 1.7 + 1.1) * 5 * g;
-      armR.current?.setAttribute(
-        "transform",
-        `rotate(${-gr} 296 396) translate(${g * 6} ${-Math.abs(gr) * 0.4})`,
+      /* ---- head ----------------------------------------------------------- */
+      set(
+        headG.current, "transform",
+        `translate(200 210) rotate(${(p.headTilt * 0.7).toFixed(2)}) ` +
+        `translate(${(p.headTurn * 1.5).toFixed(2)} ${(p.breath * 0.4 + p.headNod).toFixed(2)}) ` +
+        `scale(${(1 + p.headPush * 0.02).toFixed(4)}) translate(-200 -210)`,
       );
-      armL.current?.setAttribute("transform", `rotate(${gl * 0.6} 104 396) translate(${-g * 3} 0)`);
+      // Face plane slides slightly against the skull = perspective turn.
+      set(faceG.current, "transform", `translate(${(p.headTurn * 0.45).toFixed(2)} 0)`);
 
-      // --- blinking ----------------------------------------------------------
-      if (blinkPhase === "none" && now > blinkAt) blinkPhase = "close";
-      if (blinkPhase === "close") {
-        blink += dt * 14;
-        if (blink >= 1) { blink = 1; blinkPhase = "open"; }
-      } else if (blinkPhase === "open") {
-        blink -= dt * 9;
-        if (blink <= 0) { blink = 0; blinkPhase = "none"; blinkAt = now + 1600 + Math.random() * 3600; }
-      }
+      /* ---- hair (spring lag + overshoot) ---------------------------------- */
+      set(
+        hairBackG.current, "transform",
+        `rotate(${(p.hairBack * 0.5).toFixed(2)} 200 130) translate(${(p.headTurn * 0.6).toFixed(2)} 0)`,
+      );
+      set(
+        hairSideL.current, "transform",
+        `rotate(${(p.hairLag * 0.9).toFixed(2)} 140 150) translate(${(p.headTurn * 0.8).toFixed(2)} 0)`,
+      );
+      set(
+        hairSideR.current, "transform",
+        `rotate(${(p.hairLag * 0.9).toFixed(2)} 260 150) translate(${(p.headTurn * 0.8).toFixed(2)} 0)`,
+      );
+      set(
+        bangs.current, "transform",
+        `translate(${(p.headTurn * 0.9 + p.hairBangs * 0.8).toFixed(2)} ${(p.hairBangs * 0.25).toFixed(2)})`,
+      );
 
-      const targetOpen = pose.eyeOpen * (listening ? 1.06 : 1) * (1 - blink);
-      cur.open = damp(cur.open, targetOpen, dt, 20);
-      const lidScale = Math.max(0.02, cur.open);
-      lidL.current?.setAttribute("transform", `translate(152 208) scale(1 ${lidScale}) translate(-152 -208)`);
-      lidR.current?.setAttribute("transform", `translate(248 208) scale(1 ${lidScale}) translate(-248 -208)`);
+      /* ---- eyes ------------------------------------------------------------ */
+      const lid = (el: Element | null, cx: number, open: number) =>
+        set(el, "transform", `translate(${cx} 208) scale(1 ${clamp(open, 0.02, 1.35).toFixed(3)}) translate(${-cx} -208)`);
+      lid(lidL.current, 152, p.eyeOpenL);
+      lid(lidR.current, 248, p.eyeOpenR);
+      set(lowLidL.current, "transform", `translate(0 ${(-p.squint * 6).toFixed(2)})`);
+      set(lowLidR.current, "transform", `translate(0 ${(-p.squint * 6).toFixed(2)})`);
 
-      // --- eye tracking ------------------------------------------------------
-      const glance = thinking ? Math.sin(t * 0.5) * 2.4 : 0;
-      const gx = Math.max(-4.5, Math.min(4.5, pointer.current.x * 3.6 + Math.sin(t * 0.6) * 0.9 + glance));
-      const gy = Math.max(-3, Math.min(3, pointer.current.y * 2.4 + (thinking ? -1.6 : 0)));
-      const gaze = (cx: number) =>
-        `translate(${gx} ${gy}) translate(${cx} 208) scale(${pose.pupil}) translate(${-cx} -208)`;
-      pupils.current?.setAttribute("transform", gaze(152));
-      pupilsR.current?.setAttribute("transform", gaze(248));
+      const gx = p.gazeX * 5.5;
+      const gy = p.gazeY * 3.6;
+      set(irisL.current, "transform", `translate(${gx.toFixed(2)} ${gy.toFixed(2)}) translate(152 208) scale(${p.pupil.toFixed(3)}) translate(-152 -208)`);
+      set(irisR.current, "transform", `translate(${(gx * 1.04).toFixed(2)} ${gy.toFixed(2)}) translate(248 208) scale(${p.pupil.toFixed(3)}) translate(-248 -208)`);
+      // Pupils dilate a touch with emotional arousal.
+      const dil = (1 + (p.energy - 1) * 0.12).toFixed(3);
+      set(pupilL.current, "transform", `translate(152 213) scale(${dil}) translate(-152 -213)`);
+      set(pupilR.current, "transform", `translate(248 213) scale(${dil}) translate(-248 -213)`);
 
-      // --- brows -------------------------------------------------------------
-      cur.brow = damp(cur.brow, pose.brow, dt, 6);
-      cur.browY = damp(cur.browY, pose.browY + (thinking ? -2 : 0) + (speaking ? -level * 1.4 : 0), dt, 6);
-      browL.current?.setAttribute("transform", `translate(0 ${cur.browY}) rotate(${cur.brow * 7} 152 174)`);
-      browR.current?.setAttribute("transform", `translate(0 ${cur.browY}) rotate(${-cur.brow * 7} 248 174)`);
+      /* ---- brows ----------------------------------------------------------- */
+      const inner = p.browInner * 4;
+      set(browL.current, "transform", `translate(${(gx * 0.15).toFixed(2)} ${(p.browY - inner * 0.4).toFixed(2)}) rotate(${(p.browL * 8 - p.browInner * 9).toFixed(2)} 152 176)`);
+      set(browR.current, "transform", `translate(${(gx * 0.15).toFixed(2)} ${(p.browY - inner * 0.4).toFixed(2)}) rotate(${(-p.browR * 8 + p.browInner * 9).toFixed(2)} 248 176)`);
 
-      // --- mouth / lip sync --------------------------------------------------
-      let target = 0;
-      if (speaking) {
-        const flutter = 0.55 + 0.45 * Math.sin(t * 11.3) * Math.sin(t * 4.7) + 0.2 * Math.sin(t * 19);
-        target = Math.max(0.08, level * Math.abs(flutter));
-      } else if (listening) {
-        target = 0.05;
-      }
-      cur.mouth = damp(cur.mouth, target, dt, 22);
-      cur.smile = damp(cur.smile, pose.smile, dt, 6);
+      /* ---- mouth (viseme shapes) -------------------------------------------- */
+      const m = p.mouth;
+      const openPx = m.open * 17;
+      const width = 13 + m.wide * 9 - m.round * 5;
+      const cy = 252 + m.open * 2;
+      const smileLift = p.smile * 6;
 
-      if (mouthOpen.current) {
-        const h = 2 + cur.mouth * 15;
-        const w = 11 + cur.mouth * 6;
-        mouthOpen.current.setAttribute(
-          "d",
-          `M${200 - w} 250 Q200 ${250 - 3 - cur.smile * 2} ${200 + w} 250 Q200 ${250 + h} ${200 - w} 250 Z`,
-        );
-        mouthOpen.current.setAttribute("opacity", String(Math.min(1, cur.mouth * 4)));
-      }
-      if (teeth.current) {
-        teeth.current.setAttribute("opacity", String(Math.min(0.95, cur.mouth * 3)));
-      }
-      if (mouthLine.current) {
-        const c = cur.smile * 7;
-        mouthLine.current.setAttribute("d", `M186 ${250 - c * 0.2} Q200 ${250 + c} 214 ${250 - c * 0.2}`);
-        mouthLine.current.setAttribute("opacity", String(Math.max(0, 1 - cur.mouth * 2.2)));
-      }
-      mouth.current?.setAttribute("transform", `translate(0 ${cur.mouth * 1.5})`);
+      set(
+        mouthInner.current, "d",
+        `M${(200 - width).toFixed(1)} ${cy.toFixed(1)} ` +
+        `Q200 ${(cy - 3 - smileLift * 0.4).toFixed(1)} ${(200 + width).toFixed(1)} ${cy.toFixed(1)} ` +
+        `Q200 ${(cy + openPx).toFixed(1)} ${(200 - width).toFixed(1)} ${cy.toFixed(1)} Z`,
+      );
+      set(mouthInner.current, "opacity", String(Math.min(1, m.open * 5)));
+      set(teeth.current, "opacity", (m.teeth * Math.min(1, m.open * 4) * 0.95).toFixed(3));
+      set(teeth.current, "d", `M${(200 - width * 0.8).toFixed(1)} ${cy.toFixed(1)} h${(width * 1.6).toFixed(1)} v${(2 + m.teeth * 3).toFixed(1)} h${(-width * 1.6).toFixed(1)} Z`);
+      set(tongue.current, "opacity", (m.tongue * Math.min(1, m.open * 3)).toFixed(3));
+      set(tongue.current, "cy", (cy + openPx * 0.72).toFixed(1));
+      set(tongue.current, "rx", (width * 0.6).toFixed(1));
+      set(tongue.current, "ry", (2 + m.tongue * 3.5).toFixed(1));
+      set(
+        upperLip.current, "d",
+        `M${(200 - width - 1).toFixed(1)} ${(cy - 1).toFixed(1)} Q200 ${(cy - 4 - m.press * 2 - smileLift * 0.3).toFixed(1)} ${(200 + width + 1).toFixed(1)} ${(cy - 1).toFixed(1)}`,
+      );
+      set(
+        mouthLine.current, "d",
+        `M${(200 - 13 - p.smile * 2).toFixed(1)} ${(252 - smileLift * 0.25).toFixed(1)} ` +
+        `Q200 ${(252 + smileLift).toFixed(1)} ${(200 + 13 + p.smile * 2).toFixed(1)} ${(252 - smileLift * 0.25).toFixed(1)}`,
+      );
+      set(mouthLine.current, "opacity", String(Math.max(0, 1 - m.open * 3)));
+      set(mouthG.current, "transform", `translate(${(p.headTurn * 0.2).toFixed(2)} ${(m.open * 1.5).toFixed(2)})`);
 
-      cur.blush = damp(cur.blush, pose.blush + (speaking ? 0.15 : 0), dt, 3);
-      blushG.current?.setAttribute("opacity", String(cur.blush * 0.8));
+      set(blushG.current, "opacity", (p.blush * 0.85).toFixed(3));
+
+      /* ---- arms + hands ------------------------------------------------------ */
+      const a = p.arms;
+      set(armRG.current, "transform", `rotate(${a.rightArm.toFixed(2)} 288 372)`);
+      set(foreArmR.current, "transform", `rotate(${a.rightElbow.toFixed(2)} 318 434)`);
+      set(handR.current, "transform", `translate(340 480) rotate(${a.rightWrist.toFixed(2)}) scale(${(0.85 + a.rightOpen * 0.3).toFixed(3)})`);
+      set(armLG.current, "transform", `rotate(${a.leftArm.toFixed(2)} 112 372)`);
+      set(foreArmL.current, "transform", `rotate(${a.leftElbow.toFixed(2)} 82 434)`);
+      set(handL.current, "transform", `translate(60 480) rotate(${a.leftWrist.toFixed(2)}) scale(${(0.85 + a.leftOpen * 0.3).toFixed(3)}, ${(0.85 + a.leftOpen * 0.3).toFixed(3)}) scale(-1 1)`);
+      set(bodyG.current, "transform", `translate(0 ${(a.lean * -2).toFixed(2)})`);
 
       frame = requestAnimationFrame(tick);
     };
@@ -259,11 +208,11 @@ export default function AnimeAvatar() {
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  const iris = useMemo(() => IRIS[emotion], [emotion]);
+  const iris = useMemo(() => IRIS[emotion] ?? IRIS.neutral, [emotion]);
 
   return (
     <svg
-      ref={root}
+      ref={svg}
       viewBox="0 0 400 520"
       className="h-full w-full"
       preserveAspectRatio="xMidYMax meet"
@@ -276,7 +225,7 @@ export default function AnimeAvatar() {
           <stop offset="45%" stopColor="#1d2136" />
           <stop offset="100%" stopColor="#121524" />
         </linearGradient>
-        <linearGradient id="hairBack" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="hairBackGrad" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor="#22273c" />
           <stop offset="60%" stopColor="#161a2b" />
           <stop offset="100%" stopColor="#0d101c" />
@@ -305,182 +254,188 @@ export default function AnimeAvatar() {
         <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
           <feGaussianBlur stdDeviation="6" />
         </filter>
-        <clipPath id="eyeClipL">
-          <ellipse cx="152" cy="208" rx="25" ry="28" />
-        </clipPath>
-        <clipPath id="eyeClipR">
-          <ellipse cx="248" cy="208" rx="25" ry="28" />
-        </clipPath>
-        <clipPath id="mouthClip">
-          <ellipse cx="200" cy="252" rx="20" ry="16" />
-        </clipPath>
+        <clipPath id="eyeClipL"><ellipse cx="152" cy="208" rx="25" ry="28" /></clipPath>
+        <clipPath id="eyeClipR"><ellipse cx="248" cy="208" rx="25" ry="28" /></clipPath>
+        <clipPath id="mouthClip"><ellipse cx="200" cy="254" rx="26" ry="20" /></clipPath>
       </defs>
 
-      {/* aura bloom */}
       <ellipse cx="200" cy="250" rx="170" ry="210" fill="var(--sky-bloom)" opacity="0.2" filter="url(#soft)" />
 
       <g ref={stage}>
-        <g ref={body}>
-          {/* ---- back hair: chin-length bob, slightly flicked tips ---- */}
-          <g ref={hairL}>
-            <path
-              d="M132 120 C86 158 74 236 84 310 C90 352 104 380 118 400
-                 C112 360 110 320 116 286 C122 246 128 176 162 132 Z"
-              fill="url(#hairBack)"
-            />
-          </g>
-          <g ref={hairR}>
-            <path
-              d="M268 120 C314 158 326 236 316 310 C310 352 296 380 282 400
-                 C288 360 290 320 284 286 C278 246 272 176 238 132 Z"
-              fill="url(#hairBack)"
-            />
-          </g>
+        {/* ================= back hair ================= */}
+        <g ref={hairBackG}>
+          <path
+            d="M200 92 C132 92 96 150 96 232 C96 304 108 372 122 424 L278 424
+               C292 372 304 304 304 232 C304 150 268 92 200 92 Z"
+            fill="url(#hairBackGrad)"
+          />
+        </g>
 
-          {/* ---- neck + shoulders ---- */}
-          <path d="M181 288 h38 v34 c0 15 -38 15 -38 0 z" fill="#f2c6b4" />
-
-          <g ref={shoulders}>
-            {/* inner top */}
-            <path
-              d="M200 316 C232 316 258 332 274 356 C288 378 296 420 300 520 L100 520
-                 C104 420 112 378 126 356 C142 332 168 316 200 316 Z"
-              fill="url(#inner)"
-            />
-            {/* neckline shading */}
-            <path d="M168 332 C182 352 218 352 232 332" stroke="#c7d4e0" strokeWidth="3" fill="none" />
-
-            {/* yellow cardigan — open front */}
-            <path
-              d="M148 322 C120 336 104 368 98 404 C92 444 90 484 90 520 L162 520
-                 C158 470 158 420 166 372 C170 350 166 332 148 322 Z"
-              fill="url(#cardigan)"
-            />
-            <path
-              d="M252 322 C280 336 296 368 302 404 C308 444 310 484 310 520 L238 520
-                 C242 470 242 420 234 372 C230 350 234 332 252 322 Z"
-              fill="url(#cardigan)"
-            />
-            {/* cardigan edge shading */}
-            <path d="M166 372 C160 424 158 472 162 520" stroke="#c99a1f" strokeWidth="3" fill="none" opacity="0.6" />
-            <path d="M234 372 C240 424 242 472 238 520" stroke="#c99a1f" strokeWidth="3" fill="none" opacity="0.6" />
-
-            {/* arms / gesturing hands */}
-            <g ref={armL}>
-              <path d="M104 396 C96 434 96 476 100 516" stroke="#eec03a" strokeWidth="30" strokeLinecap="round" fill="none" />
-              <ellipse cx="100" cy="514" rx="16" ry="14" fill="url(#skin)" />
+        <g ref={bodyG}>
+          <g ref={torso}>
+            {/* ---- neck ---- */}
+            <g ref={neck}>
+              <path d="M181 288 h38 v34 c0 15 -38 15 -38 0 z" fill="#f2c6b4" />
+              <path d="M182 296 c10 12 26 12 36 0" stroke="#e3ab98" strokeWidth="3" fill="none" opacity="0.7" />
             </g>
-            <g ref={armR}>
-              <path d="M296 396 C312 424 328 452 340 470" stroke="#eec03a" strokeWidth="30" strokeLinecap="round" fill="none" />
-              {/* open palm, as in the reference gesture */}
-              <g transform="translate(348 476)">
-                <path
-                  d="M-4 -10 C10 -18 26 -12 30 0 C34 12 24 22 10 22 C-4 22 -14 12 -12 2 Z"
-                  fill="url(#skin)"
-                />
-                <path d="M2 -6 C10 -8 18 -4 22 2" stroke="#e7b6a3" strokeWidth="2" fill="none" />
-                <path d="M0 4 C8 2 16 6 20 12" stroke="#e7b6a3" strokeWidth="2" fill="none" />
+
+            <g ref={shoulders}>
+              {/* ---- inner top ---- */}
+              <path
+                d="M200 316 C232 316 258 332 274 356 C288 378 296 420 300 520 L100 520
+                   C104 420 112 378 126 356 C142 332 168 316 200 316 Z"
+                fill="url(#inner)"
+              />
+              <path d="M168 332 C182 352 218 352 232 332" stroke="#c7d4e0" strokeWidth="3" fill="none" />
+
+              {/* ---- arms (upper + fore + hand, independently rigged) ---- */}
+              <g ref={armLG}>
+                <path d="M112 372 C96 398 86 418 82 434" stroke="#eec03a" strokeWidth="30" strokeLinecap="round" fill="none" />
+                <g ref={foreArmL}>
+                  <path d="M82 434 C74 456 66 470 60 480" stroke="#eec03a" strokeWidth="27" strokeLinecap="round" fill="none" />
+                  <g ref={handL}>
+                    <path d="M-6 -12 C10 -20 28 -13 32 0 C36 13 25 24 10 24 C-6 24 -16 13 -14 2 Z" fill="url(#skin)" />
+                    <path d="M2 -7 C11 -9 20 -4 24 3" stroke="#e7b6a3" strokeWidth="2" fill="none" />
+                    <path d="M0 5 C9 3 18 7 22 13" stroke="#e7b6a3" strokeWidth="2" fill="none" />
+                  </g>
+                </g>
               </g>
+
+              <g ref={armRG}>
+                <path d="M288 372 C304 398 314 418 318 434" stroke="#eec03a" strokeWidth="30" strokeLinecap="round" fill="none" />
+                <g ref={foreArmR}>
+                  <path d="M318 434 C326 456 334 470 340 480" stroke="#eec03a" strokeWidth="27" strokeLinecap="round" fill="none" />
+                  <g ref={handR}>
+                    <path d="M-6 -12 C10 -20 28 -13 32 0 C36 13 25 24 10 24 C-6 24 -16 13 -14 2 Z" fill="url(#skin)" />
+                    <path d="M2 -7 C11 -9 20 -4 24 3" stroke="#e7b6a3" strokeWidth="2" fill="none" />
+                    <path d="M0 5 C9 3 18 7 22 13" stroke="#e7b6a3" strokeWidth="2" fill="none" />
+                  </g>
+                </g>
+              </g>
+
+              {/* ---- cardigan (drawn over the shoulders) ---- */}
+              <path
+                d="M148 322 C120 336 104 368 98 404 C92 444 90 484 90 520 L162 520
+                   C158 470 158 420 166 372 C170 350 166 332 148 322 Z"
+                fill="url(#cardigan)"
+              />
+              <path
+                d="M252 322 C280 336 296 368 302 404 C308 444 310 484 310 520 L238 520
+                   C242 470 242 420 234 372 C230 350 234 332 252 322 Z"
+                fill="url(#cardigan)"
+              />
+              <path d="M166 372 C160 424 158 472 162 520" stroke="#c99a1f" strokeWidth="3" fill="none" opacity="0.6" />
+              <path d="M234 372 C240 424 242 472 238 520" stroke="#c99a1f" strokeWidth="3" fill="none" opacity="0.6" />
             </g>
           </g>
         </g>
 
-        <g ref={head}>
-          {/* face */}
-          <path
-            d="M200 108 C142 108 118 152 118 202 C118 252 146 296 200 308 C254 296 282 252 282 202 C282 152 258 108 200 108 Z"
-            fill="url(#skin)"
-          />
-          {/* ears */}
-          <ellipse cx="119" cy="214" rx="10" ry="16" fill="#f9dccf" />
-          <ellipse cx="281" cy="214" rx="10" ry="16" fill="#f9dccf" />
+        {/* ================= head ================= */}
+        <g ref={headG}>
+          <g ref={faceG}>
+            <path
+              d="M200 108 C142 108 118 152 118 202 C118 252 146 296 200 308 C254 296 282 252 282 202 C282 152 258 108 200 108 Z"
+              fill="url(#skin)"
+            />
+            <ellipse cx="119" cy="214" rx="10" ry="16" fill="#f9dccf" />
+            <ellipse cx="281" cy="214" rx="10" ry="16" fill="#f9dccf" />
 
-          {/* blush */}
-          <g ref={blushG} opacity="0.5">
-            <ellipse cx="141" cy="242" rx="26" ry="13" fill="url(#blushGrad)" />
-            <ellipse cx="259" cy="242" rx="26" ry="13" fill="url(#blushGrad)" />
-          </g>
+            <g ref={blushG} opacity="0.5">
+              <ellipse cx="141" cy="242" rx="26" ry="13" fill="url(#blushGrad)" />
+              <ellipse cx="259" cy="242" rx="26" ry="13" fill="url(#blushGrad)" />
+            </g>
 
-          {/* eyes — large, soft grey, big catchlights */}
-          <g>
+            {/* ---- eyes ---- */}
             <ellipse cx="152" cy="208" rx="25" ry="28" fill="#ffffff" />
             <ellipse cx="248" cy="208" rx="25" ry="28" fill="#ffffff" />
+
             <g clipPath="url(#eyeClipL)">
-              <g ref={pupils}>
+              <g ref={irisL}>
                 <ellipse cx="152" cy="209" rx="18" ry="22" fill="url(#irisGrad)" />
-                <ellipse cx="152" cy="213" rx="8.5" ry="10.5" fill="#1b1d24" opacity="0.85" />
+                <ellipse ref={pupilL} cx="152" cy="213" rx="8.5" ry="10.5" fill="#1b1d24" opacity="0.85" />
                 <ellipse cx="152" cy="223" rx="13" ry="7" fill="#e6e9ee" opacity="0.35" />
                 <circle cx="145" cy="199" r="6.6" fill="#ffffff" opacity="0.98" />
                 <circle cx="160" cy="217" r="3.4" fill="#ffffff" opacity="0.8" />
               </g>
-              {/* upper lid shadow */}
               <ellipse cx="152" cy="184" rx="26" ry="12" fill="#4a4f5c" opacity="0.28" />
+              <g ref={lowLidL}>
+                <ellipse cx="152" cy="243" rx="26" ry="9" fill="#ffe6d8" />
+              </g>
             </g>
             <g clipPath="url(#eyeClipR)">
-              <g ref={pupilsR}>
+              <g ref={irisR}>
                 <ellipse cx="248" cy="209" rx="18" ry="22" fill="url(#irisGrad)" />
-                <ellipse cx="248" cy="213" rx="8.5" ry="10.5" fill="#1b1d24" opacity="0.85" />
+                <ellipse ref={pupilR} cx="248" cy="213" rx="8.5" ry="10.5" fill="#1b1d24" opacity="0.85" />
                 <ellipse cx="248" cy="223" rx="13" ry="7" fill="#e6e9ee" opacity="0.35" />
                 <circle cx="241" cy="199" r="6.6" fill="#ffffff" opacity="0.98" />
                 <circle cx="256" cy="217" r="3.4" fill="#ffffff" opacity="0.8" />
               </g>
               <ellipse cx="248" cy="184" rx="26" ry="12" fill="#4a4f5c" opacity="0.28" />
+              <g ref={lowLidR}>
+                <ellipse cx="248" cy="243" rx="26" ry="9" fill="#ffe6d8" />
+              </g>
             </g>
 
-            {/* lashes / lids */}
+            {/* ---- lids (scale to blink) ---- */}
             <g ref={lidL}>
-              <path d="M127 199 C134 176 172 176 177 197" stroke="#1b1f2e" strokeWidth="8.5" strokeLinecap="round" fill="none" />
-              <path d="M127 197 l-9 -8" stroke="#1b1f2e" strokeWidth="6" strokeLinecap="round" />
-              <path d="M133 224 C142 234 164 234 172 224" stroke="#3b3f4c" strokeWidth="2.2" fill="none" opacity="0.55" />
+              <path d="M127 208 a25 30 0 0 1 50 0 v-34 h-50 z" fill="url(#skin)" />
+              <path d="M127 206 a25 26 0 0 1 50 0" stroke="#3a3f4d" strokeWidth="4.5" fill="none" strokeLinecap="round" />
             </g>
             <g ref={lidR}>
-              <path d="M223 197 C228 176 266 176 273 199" stroke="#1b1f2e" strokeWidth="8.5" strokeLinecap="round" fill="none" />
-              <path d="M273 197 l9 -8" stroke="#1b1f2e" strokeWidth="6" strokeLinecap="round" />
-              <path d="M228 224 C236 234 258 234 267 224" stroke="#3b3f4c" strokeWidth="2.2" fill="none" opacity="0.55" />
+              <path d="M223 208 a25 30 0 0 1 50 0 v-34 h-50 z" fill="url(#skin)" />
+              <path d="M223 206 a25 26 0 0 1 50 0" stroke="#3a3f4d" strokeWidth="4.5" fill="none" strokeLinecap="round" />
+            </g>
+
+            {/* ---- eyebrows ---- */}
+            <g ref={browL}>
+              <path d="M134 174 C143 168 162 168 171 173" stroke="#2a2e42" strokeWidth="5.5" strokeLinecap="round" fill="none" />
+            </g>
+            <g ref={browR}>
+              <path d="M229 173 C238 168 257 168 266 174" stroke="#2a2e42" strokeWidth="5.5" strokeLinecap="round" fill="none" />
+            </g>
+
+            {/* ---- nose ---- */}
+            <path d="M200 228 c3 6 2 9 -3 10" stroke="#e5b6a4" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+
+            {/* ---- mouth: inner cavity, tongue, teeth, lips ---- */}
+            <g ref={mouthG}>
+              <g clipPath="url(#mouthClip)">
+                <path ref={mouthInner} d="M187 252 Q200 249 213 252 Q200 254 187 252 Z" fill="#7d2f3c" />
+                <ellipse ref={tongue} cx="200" cy="258" rx="8" ry="3" fill="#e3697a" opacity="0" />
+                <path ref={teeth} d="M190 252 h20 v3 h-20 Z" fill="#fffaf6" opacity="0" />
+              </g>
+              <path ref={upperLip} d="M186 251 Q200 248 214 251" stroke="#d98d8d" strokeWidth="2" fill="none" strokeLinecap="round" />
+              <path ref={mouthLine} d="M187 252 Q200 256 213 252" stroke="#c4707a" strokeWidth="3" fill="none" strokeLinecap="round" />
             </g>
           </g>
 
-          {/* brows — thin, dark, slightly worried */}
-          <g ref={browL}>
-            <path d="M130 172 Q152 163 174 170" stroke="#26293a" strokeWidth="4.5" strokeLinecap="round" fill="none" />
-          </g>
-          <g ref={browR}>
-            <path d="M226 170 Q248 163 270 172" stroke="#26293a" strokeWidth="4.5" strokeLinecap="round" fill="none" />
-          </g>
-
-          {/* nose */}
-          <path d="M200 232 q3 5 -2 6" stroke="#e0a894" strokeWidth="2.5" strokeLinecap="round" fill="none" />
-
-          {/* mouth */}
-          <g ref={mouth}>
-            <g clipPath="url(#mouthClip)">
-              <path ref={mouthOpen} d="M189 250 Q200 247 211 250 Q200 252 189 250 Z" fill="#8e2f42" opacity="0" />
-              <path ref={teeth} d="M186 248 h28 v5 h-28 z" fill="#ffffff" opacity="0" />
-            </g>
+          {/* ---- side hair ---- */}
+          <g ref={hairSideL}>
             <path
-              ref={mouthLine}
-              d="M188 249 Q200 256 212 249"
-              stroke="#b7455a"
-              strokeWidth="3"
-              strokeLinecap="round"
-              fill="none"
-            />
-          </g>
-
-          {/* bangs — soft center-parted curtain sitting above the brows */}
-          <g ref={bangs}>
-            <path
-              d="M112 190 C106 124 142 70 200 70 C258 70 294 124 288 190
-                 C280 164 268 148 254 140 C244 156 228 166 210 170
-                 C206 146 202 128 200 116 C196 130 190 148 184 168
-                 C166 164 152 152 144 138 C130 150 118 168 112 190 Z"
+              d="M132 118 C104 146 96 210 102 272 C106 310 114 336 122 356
+                 C118 316 116 274 122 236 C128 194 136 152 162 126 Z"
               fill="url(#hairGrad)"
             />
-            {/* face-framing side locks down to the jaw */}
-            <path d="M118 148 C102 196 100 262 110 312 C116 272 116 228 126 198 C130 182 126 162 118 148 Z" fill="url(#hairGrad)" />
-            <path d="M282 148 C298 196 300 262 290 312 C284 272 284 228 274 198 C270 182 274 162 282 148 Z" fill="url(#hairGrad)" />
-            {/* soft gloss */}
-            <path d="M150 112 C178 96 222 96 250 114" stroke="#616a87" strokeWidth="6" strokeLinecap="round" fill="none" opacity="0.35" />
+          </g>
+          <g ref={hairSideR}>
+            <path
+              d="M268 118 C296 146 304 210 298 272 C294 310 286 336 278 356
+                 C282 316 284 274 278 236 C272 194 264 152 238 126 Z"
+              fill="url(#hairGrad)"
+            />
+          </g>
+
+          {/* ---- bangs ---- */}
+          <g ref={bangs}>
+            <path
+              d="M200 92 C150 92 120 128 118 176 C130 152 148 138 168 134
+                 C160 148 158 160 160 170 C170 148 188 136 206 134
+                 C200 146 198 158 200 168 C212 146 232 136 250 140
+                 C246 150 246 158 250 166 C262 150 274 154 282 176
+                 C282 126 252 92 200 92 Z"
+              fill="url(#hairGrad)"
+            />
+            <path d="M172 108 C196 100 224 102 244 114" stroke="#3a4160" strokeWidth="4" fill="none" opacity="0.5" strokeLinecap="round" />
           </g>
         </g>
       </g>
