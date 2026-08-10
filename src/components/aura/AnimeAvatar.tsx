@@ -467,23 +467,20 @@ export default function AnimeAvatar() {
             />
           </g>
 
-          {/* bangs — center-parted with long face-framing locks */}
+          {/* bangs — soft center-parted curtain sitting above the brows */}
           <g ref={bangs}>
             <path
-              d="M112 196 C104 126 140 70 200 70 C260 70 296 126 288 196
-                 C282 168 272 150 260 142 C256 164 248 176 238 186
-                 C240 156 228 132 208 118 C200 142 186 160 168 172
-                 C162 154 152 142 142 136 C130 150 118 172 112 196 Z"
+              d="M112 190 C106 124 142 70 200 70 C258 70 294 124 288 190
+                 C280 164 268 148 254 140 C244 156 228 166 210 170
+                 C206 146 202 128 200 116 C196 130 190 148 184 168
+                 C166 164 152 152 144 138 C130 150 118 168 112 190 Z"
               fill="url(#hairGrad)"
             />
+            {/* face-framing side locks down to the jaw */}
             <path d="M118 148 C102 196 100 262 110 312 C116 272 116 228 126 198 C130 182 126 162 118 148 Z" fill="url(#hairGrad)" />
             <path d="M282 148 C298 196 300 262 290 312 C284 272 284 228 274 198 C270 182 274 162 282 148 Z" fill="url(#hairGrad)" />
-            {/* glossy highlight band */}
-            <path d="M146 118 C176 100 226 100 254 120" stroke="#6f7794" strokeWidth="7" strokeLinecap="round" fill="none" opacity="0.55" />
-            <path d="M158 106 C182 94 216 94 240 106" stroke="#9aa2bd" strokeWidth="3" strokeLinecap="round" fill="none" opacity="0.45" />
-            {/* wisps */}
-            <path d="M150 124 C140 152 136 186 140 214" stroke="#3a4058" strokeWidth="2.5" fill="none" opacity="0.7" />
-            <path d="M252 122 C262 150 266 184 262 212" stroke="#3a4058" strokeWidth="2.5" fill="none" opacity="0.7" />
+            {/* soft gloss */}
+            <path d="M150 112 C178 96 222 96 250 114" stroke="#616a87" strokeWidth="6" strokeLinecap="round" fill="none" opacity="0.35" />
           </g>
         </g>
       </g>
