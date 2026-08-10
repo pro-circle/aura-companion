@@ -1,0 +1,24 @@
+[project]
+name = "aura-backend"
+version = "0.1.0"
+description = "AURA - Adaptive Unified Responsive AI Avatar backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-multipart>=0.0.12",
+]
+
+[project.optional-dependencies]
+# Optional local STT fallback (no API key, fully offline).
+local-stt = ["faster-whisper>=1.0.3"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
