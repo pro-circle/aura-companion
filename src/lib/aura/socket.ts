@@ -173,7 +173,8 @@ export function useAuraConnection() {
         useAuraStore.getState().setError(null);
         perform(reply.response, reply.emotion, reply.priority);
       })
-      .catch(() => {
+      .catch((error) => {
+        console.error("[aura] fallback brain failed", error);
         const st = useAuraStore.getState();
         st.setError("AURA couldn't reach a brain just now — try again in a moment.");
         st.setAvatarState("idle");
