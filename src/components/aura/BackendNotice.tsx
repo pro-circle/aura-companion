@@ -13,12 +13,12 @@ export function BackendNotice() {
         <p>{lastError}</p>
       ) : (
         <p>
-          Waiting on the AURA backend at{" "}
-          <code className="font-mono text-primary">{BACKEND_URL}</code>. Start it with{" "}
+          Running on AURA&apos;s built-in brain — your FastAPI backend at{" "}
+          <code className="font-mono text-primary">{BACKEND_URL}</code> isn&apos;t up. Start it with{" "}
           <code className="font-mono text-primary">
             cd backend &amp;&amp; uvicorn app.main:app --reload --port 8000
-          </code>
-          .
+          </code>{" "}
+          to use your own key pool.
         </p>
       )}
     </div>

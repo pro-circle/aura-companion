@@ -2,7 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 import { useAuraStore } from "@/lib/aura/store";
-import { recognitionSupported, startVoiceStream, stopSpeaking, type VoiceStream } from "@/lib/aura/speech";
+import {
+  recognitionSupported,
+  requestMicAccess,
+  startVoiceStream,
+  stopSpeaking,
+  type VoiceStream,
+} from "@/lib/aura/speech";
 
 interface ChatDockProps {
   onSend: (text: string) => void;
@@ -21,6 +27,7 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
   const [input, setInput] = useState("");
   const [interim, setInterim] = useState("");
   const [listening, setListening] = useState(false);
+  const [micBusy, setMicBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
@@ -51,8 +58,24 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
     if (useAuraStore.getState().avatarState === "listening") setAvatarState("idle");
   };
 
-  const startListening = () => {
+  const startListening = async () => {
+    if (micBusy) return;
+    setMicBusy(true);
     stopSpeaking();
+
+    // Grant first, listen second — otherwise the recogniser dies silently.
+    const access = await requestMicAccess();
+    if (!access.ok) {
+      setError(access.reason ?? "Couldn't open the microphone.");
+      setMicBusy(false);
+      return;
+    }
+    if (!recognitionSupported()) {
+      setError("Live voice input needs Chrome, Edge or Safari.");
+      setMicBusy(false);
+      return;
+    }
+
     const stream = startVoiceStream({
       onInterim: (text) => setInterim(text),
       onFinal: (text) => {
@@ -69,17 +92,20 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
         patchContext({ mic_state: "idle" });
       },
     });
+    setMicBusy(false);
     if (!stream) return;
     streamRef.current = stream;
     setListening(true);
+    setError(null);
     setAvatarState("listening");
     patchContext({ mic_state: "listening" });
   };
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (!input.trim() || busy) return;
-    onSend(input);
+    const text = input.trim();
+    if (!text) return;
+    onSend(text);
     setInput("");
     inputRef.current?.focus();
   };
@@ -173,15 +199,17 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
         </div>
 
         <form onSubmit={submit} className="mt-1 flex items-center gap-2">
-          {hydrated && micEnabled && recognitionSupported() && (
+          {hydrated && micEnabled && (
             <button
               type="button"
-              onClick={listening ? stopListening : startListening}
+              onClick={() => (listening ? stopListening() : void startListening())}
+              disabled={micBusy}
+              title={listening ? "Stop listening" : "Talk to AURA"}
               aria-label={listening ? "Stop voice streaming" : "Start voice streaming"}
               className={
                 listening
                   ? "aura-mic-live flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[color:var(--sky-ink)] text-[color:rgb(var(--sky-panel))]"
-                  : "flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[color:var(--sky-sub-ink)]/30 text-[color:var(--sky-sub-ink)] transition-colors hover:text-[color:var(--sky-ink)]"
+                  : "flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[color:var(--sky-sub-ink)]/30 text-[color:var(--sky-sub-ink)] transition-colors hover:text-[color:var(--sky-ink)] disabled:opacity-40"
               }
             >
               <svg viewBox="0 0 24 24" className="h-4.5 w-4.5" fill="currentColor" aria-hidden="true">
@@ -191,20 +219,22 @@ export function ChatDock({ onSend, onClear }: ChatDockProps) {
           )}
           <input
             ref={inputRef}
-            value={listening && interim ? interim : input}
+            value={input}
             onChange={(event) => setInput(event.target.value)}
+            autoComplete="off"
+            enterKeyHint="send"
             placeholder={
-              connection === "connected"
-                ? listening
-                  ? "Listening… just talk"
-                  : "Talk to AURA…"
-                : "Backend offline — start FastAPI"
+              listening
+                ? interim || "Listening… just talk"
+                : connection === "connected"
+                  ? "Talk to AURA…"
+                  : "Type to AURA…"
             }
             className="h-11 flex-1 rounded-full border border-[color:var(--sky-sub-ink)]/25 bg-[color:rgb(var(--sky-panel))]/70 px-4 text-sm text-[color:var(--sky-ink)] outline-none transition-colors placeholder:text-[color:var(--sky-sub-ink)] focus:border-[color:var(--sky-ink)]/50"
           />
           <button
             type="submit"
-            disabled={busy || !input.trim()}
+            disabled={!input.trim()}
             className="h-11 rounded-full bg-[color:var(--sky-ink)] px-5 text-sm font-medium text-[color:rgb(var(--sky-panel))] transition-opacity disabled:opacity-40"
           >
             Send
