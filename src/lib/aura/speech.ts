@@ -21,6 +21,41 @@ export function recognitionSupported(): boolean {
   return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
 }
 
+/**
+ * Ask for the microphone up front.
+ *
+ * SpeechRecognition triggers its own permission prompt, but inside an iframe
+ * (the Lovable preview) or on a page that has never touched getUserMedia it
+ * often fails silently with `not-allowed`. Requesting the stream first gives
+ * us a real, reportable reason.
+ */
+export async function requestMicAccess(): Promise<{ ok: boolean; reason?: string }> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+    return { ok: false, reason: "This browser can't access a microphone." };
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // We only needed the permission grant; recognition opens its own stream.
+    stream.getTracks().forEach((track) => track.stop());
+    return { ok: true };
+  } catch (error) {
+    const name = (error as { name?: string })?.name ?? "";
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      const framed = typeof window !== "undefined" && window.self !== window.top;
+      return {
+        ok: false,
+        reason: framed
+          ? "The preview frame blocked the microphone — open the app in its own tab to talk."
+          : "Microphone permission was denied. Allow it in your browser's site settings.",
+      };
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      return { ok: false, reason: "No microphone found on this device." };
+    }
+    return { ok: false, reason: "Couldn't open the microphone." };
+  }
+}
+
 /** 0..1 mouth-openness envelope from the active voice engine. */
 export function getSpeechLevel(): number {
   return activeEngine()?.level() ?? 0;
@@ -98,6 +133,11 @@ export function startVoiceStream(handlers: StreamHandlers): VoiceStream | null {
       if (code === "not-allowed" || code === "service-not-allowed") {
         stopped = true;
         handlers.onError?.("Microphone permission denied.");
+        return;
+      }
+      if (code === "network") {
+        stopped = true;
+        handlers.onError?.("Speech recognition needs a network connection.");
       }
     };
 

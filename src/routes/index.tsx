@@ -11,6 +11,7 @@ import { useDemoMode } from "@/lib/aura/useDemoMode";
 import { themeForHour, themeVars, type DayTheme } from "@/lib/aura/theme";
 import { useSensors } from "@/lib/aura/useSensors";
 import { useCursorMood } from "@/lib/aura/useCursorMood";
+import { warmUpVoice } from "@/lib/aura/voice/engine";
 
 const AnimeAvatar = lazy(() => import("@/components/aura/AnimeAvatar"));
 
@@ -53,7 +54,12 @@ function AuraPage() {
   const cameraTarget = useRef<HTMLDivElement>(null);
   useCameraRig(cameraTarget);
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    // Start downloading the local neural voice immediately; speech falls back
+    // to the browser voice until it's ready.
+    warmUpVoice();
+  }, []);
 
   return (
     <main

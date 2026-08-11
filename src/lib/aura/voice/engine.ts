@@ -238,8 +238,14 @@ abstract class PcmEngine implements VoiceEngine {
 
 /**
  * Kokoro-82M running locally in the browser (kokoro-js, Apache-2.0).
- * Loaded from a CDN at runtime; if the model can't be fetched we fall back.
- * Configure with `window.AURA_KOKORO = { module, model, voice, dtype }`.
+ *
+ * The model (~86MB, q8) is fetched from the Hugging Face CDN on first use and
+ * then cached by the browser. WebGPU is used when the browser exposes it,
+ * otherwise it runs on WASM. Nothing is sent to a server and nothing is paid
+ * for. Until the model is ready the pipeline keeps using the browser voice,
+ * so the very first reply is never delayed.
+ *
+ * Override with `window.AURA_KOKORO = { model, voice, dtype, device }`.
  */
 export class KokoroEngine extends PcmEngine {
   readonly id = "kokoro";
@@ -247,30 +253,28 @@ export class KokoroEngine extends PcmEngine {
 
   protected async load(): Promise<LocalSynth | null> {
     const cfg = (window as unknown as {
-      AURA_KOKORO?: { module?: string; model?: string; voice?: string; dtype?: string };
-    }).AURA_KOKORO;
-    if (!cfg) return null; // opt-in: downloading an ~80M model must be deliberate
+      AURA_KOKORO?: { model?: string; voice?: string; dtype?: string; device?: string };
+    }).AURA_KOKORO ?? {};
 
-    const moduleUrl = cfg.module ?? "https://esm.sh/kokoro-js@1.2.0";
-    const mod = (await import(/* @vite-ignore */ moduleUrl)) as {
-      KokoroTTS: {
-        from_pretrained: (model: string, opts: Record<string, unknown>) => Promise<{
-          generate: (text: string, opts: Record<string, unknown>) => Promise<{
-            audio: Float32Array;
-            sampling_rate: number;
-          }>;
-        }>;
-      };
-    };
-    const tts = await mod.KokoroTTS.from_pretrained(
+    const webgpu = "gpu" in navigator && Boolean((navigator as unknown as { gpu?: unknown }).gpu);
+    const device = (cfg.device ?? (webgpu ? "webgpu" : "wasm")) as "webgpu" | "wasm";
+    const dtype = cfg.dtype ?? (device === "webgpu" ? "fp32" : "q8");
+
+    const { KokoroTTS } = await import("kokoro-js");
+    const tts = await KokoroTTS.from_pretrained(
       cfg.model ?? "onnx-community/Kokoro-82M-v1.0-ONNX",
-      { dtype: cfg.dtype ?? "q8", device: "wasm" },
+      { dtype, device } as Parameters<typeof KokoroTTS.from_pretrained>[1],
     );
-    const voice = cfg.voice ?? "af_heart";
+
+    // af_heart: warm, natural American female — the closest match to the
+    // soft anime-companion tone the rest of the rig is tuned for.
+    const voice = (cfg.voice ?? "af_heart") as NonNullable<
+      NonNullable<Parameters<typeof tts.generate>[1]>["voice"]
+    >;
     return {
       synth: async (text, opts) => {
         const out = await tts.generate(text, { voice, speed: opts.speed });
-        return { audio: out.audio, sampleRate: out.sampling_rate };
+        return { audio: out.audio as Float32Array, sampleRate: out.sampling_rate };
       },
     };
   }
@@ -310,15 +314,51 @@ export const piper = new PiperEngine();
 export const ENGINES: VoiceEngine[] = [kokoro, piper, webSpeech];
 
 let resolved: VoiceEngine | null = null;
+let upgrading = false;
+const listeners = new Set<(engine: VoiceEngine) => void>();
+
+export function onEngineChange(fn: (engine: VoiceEngine) => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function announce(engine: VoiceEngine) {
+  listeners.forEach((fn) => fn(engine));
+}
+
+/**
+ * Warm the best local engine in the background. Speaking never waits for it:
+ * `selectEngine()` hands back the browser voice immediately and swaps to
+ * Kokoro the moment the model finishes downloading.
+ */
+export function warmUpVoice(): void {
+  if (upgrading || resolved === kokoro) return;
+  upgrading = true;
+  void (async () => {
+    for (const engine of [kokoro, piper]) {
+      try {
+        // eslint-disable-next-line no-await-in-loop -- ordered preference probe
+        if (await engine.isAvailable()) {
+          resolved = engine;
+          announce(engine);
+          return;
+        }
+      } catch {
+        /* try the next one */
+      }
+    }
+  })().finally(() => {
+    upgrading = false;
+  });
+}
 
 export async function selectEngine(): Promise<VoiceEngine> {
   if (resolved) return resolved;
-  for (const engine of ENGINES) {
-    // eslint-disable-next-line no-await-in-loop -- ordered preference probe
-    if (await engine.isAvailable()) {
-      resolved = engine;
-      return engine;
-    }
+  // Never block the first line on an 86MB download.
+  warmUpVoice();
+  if (await webSpeech.isAvailable()) {
+    resolved = webSpeech;
+    return webSpeech;
   }
   resolved = webSpeech;
   return webSpeech;
@@ -327,7 +367,10 @@ export async function selectEngine(): Promise<VoiceEngine> {
 /** Swap voices at runtime (e.g. once a Kokoro model has been configured). */
 export function useEngine(id: string) {
   const found = ENGINES.find((engine) => engine.id === id);
-  if (found) resolved = found;
+  if (found) {
+    resolved = found;
+    announce(found);
+  }
 }
 
 export function activeEngine(): VoiceEngine | null {

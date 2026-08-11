@@ -1,8 +1,55 @@
 import { useCallback, useEffect, useRef } from "react";
 
+import { askAura } from "./brain.functions";
 import { useAuraStore } from "./store";
 import { speak, stopSpeaking } from "./speech";
-import { backendWsUrl, type SceneContext, type ServerEvent } from "./types";
+import { backendWsUrl, type Emotion, type SceneContext, type ServerEvent } from "./types";
+
+/**
+ * Perform a reply: caption it, emote it, speak it. Shared by the FastAPI
+ * socket and the built-in fallback brain so both sound identical.
+ */
+function perform(
+  response: string,
+  emotion: Emotion,
+  priority: "low" | "normal" | "high",
+  speechRequired = true,
+) {
+  const s = useAuraStore.getState();
+  s.setEmotion(emotion);
+  s.addMessage({ role: "assistant", content: response, emotion });
+
+  if (!speechRequired || !s.privacy.voice) {
+    s.setCaption("");
+    s.setAvatarState("idle");
+    return;
+  }
+  s.setAvatarState("speaking");
+  void speak(response, {
+    emotion,
+    intensity: priority === "high" ? 1 : priority === "low" ? 0.6 : 0.85,
+    onCaption: (line) => useAuraStore.getState().setCaption(line),
+    onWord: (index) => useAuraStore.getState().setCaptionWord(index),
+    onEnd: () => {
+      const st = useAuraStore.getState();
+      st.setCaption("");
+      st.setAvatarState("idle");
+    },
+  });
+}
+
+/** Compact scene description handed to the fallback brain. */
+function sceneSummary(): string | undefined {
+  const { context } = useAuraStore.getState();
+  const bits = [
+    context.day_part ? `time of day: ${context.day_part}` : null,
+    context.face_present ? "the user's face is visible" : null,
+    context.people > 1 ? `${context.people} people on camera` : null,
+    context.mic_state === "listening" ? "the user is speaking out loud" : null,
+    context.scene_tags.length ? `scene: ${context.scene_tags.join(", ")}` : null,
+  ].filter(Boolean);
+  return bits.length ? bits.join("; ") : undefined;
+}
 
 /**
  * Real-time link to the AURA FastAPI backend.
@@ -64,26 +111,7 @@ export function useAuraConnection() {
         }
         if (data.type === "reply") {
           if (data.pool) s.setPool(data.pool);
-          s.setEmotion(data.emotion);
-          s.addMessage({ role: "assistant", content: data.response, emotion: data.emotion });
-
-          if (data.speech_required && s.privacy.voice) {
-            s.setAvatarState("speaking");
-            void speak(data.response, {
-              emotion: data.emotion,
-              intensity: data.priority === "high" ? 1 : data.priority === "low" ? 0.6 : 0.85,
-              onCaption: (line) => useAuraStore.getState().setCaption(line),
-              onWord: (index) => useAuraStore.getState().setCaptionWord(index),
-              onEnd: () => {
-                const st = useAuraStore.getState();
-                st.setCaption("");
-                st.setAvatarState("idle");
-              },
-            });
-          } else {
-            s.setCaption("");
-            s.setAvatarState("idle");
-          }
+          perform(data.response, data.emotion, data.priority, data.speech_required);
         }
       };
 
@@ -124,17 +152,33 @@ export function useAuraConnection() {
     if (!trimmed) return;
 
     store.addMessage({ role: "user", content: trimmed, emotion: "neutral" });
-
-    if (!socket || socket.readyState !== WebSocket.OPEN) {
-      store.setError("AURA's backend is offline — start the FastAPI server to talk.");
-      return;
-    }
     stopSpeaking();
     store.setAvatarState("thinking");
     store.setCaption("");
-    socket.send(
-      JSON.stringify({ type: "message", text: trimmed, context: store.context }),
-    );
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      store.setError(null);
+      socket.send(JSON.stringify({ type: "message", text: trimmed, context: store.context }));
+      return;
+    }
+
+    // FastAPI isn't running — AURA still answers, through the built-in brain.
+    const history = useAuraStore
+      .getState()
+      .messages.slice(-12, -1)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    void askAura({ data: { text: trimmed, history, scene: sceneSummary() } })
+      .then((reply) => {
+        useAuraStore.getState().setError(null);
+        perform(reply.response, reply.emotion, reply.priority);
+      })
+      .catch((error) => {
+        console.error("[aura] fallback brain failed", error);
+        const st = useAuraStore.getState();
+        st.setError("AURA couldn't reach a brain just now — try again in a moment.");
+        st.setAvatarState("idle");
+      });
   }, []);
 
   const sendContext = useCallback((context: SceneContext) => {
