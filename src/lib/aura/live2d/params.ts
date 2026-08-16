@@ -85,8 +85,8 @@ export function applyPose(core: CoreModelLike, p: RigPose) {
   set(PARAM.breath, clamp((p.breath + 2) / 4, 0, 1));
 
   // arms (optional on most models — harmless if the ids are absent)
-  set(PARAM.armLA, clamp(p.arms.upperL / 45, -1, 1));
-  set(PARAM.armRA, clamp(p.arms.upperR / 45, -1, 1));
+  set(PARAM.armLA, clamp(-p.arms.leftArm / 45, -1, 1));
+  set(PARAM.armRA, clamp(-p.arms.rightArm / 45, -1, 1));
 
   // hair physics: the rig already computes lag, so drive it directly
   set(PARAM.hairFront, clamp(p.hairBangs / 6, -1, 1));
