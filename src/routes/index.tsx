@@ -13,7 +13,7 @@ import { useSensors } from "@/lib/aura/useSensors";
 import { useCursorMood } from "@/lib/aura/useCursorMood";
 import { warmUpVoice } from "@/lib/aura/voice/engine";
 
-const AnimeAvatar = lazy(() => import("@/components/aura/AnimeAvatar"));
+const AvatarStage = lazy(() => import("@/components/aura/AvatarStage"));
 
 const TITLE = "AURA — Your Anime AI Friend Who Sees the Room";
 const DESCRIPTION =
@@ -82,7 +82,7 @@ function AuraPage() {
 
           {mounted && (
             <Suspense fallback={null}>
-              <AnimeAvatar />
+              <AvatarStage />
             </Suspense>
           )}
         </div>
