@@ -14,12 +14,13 @@ import { rig } from "@/lib/aura/rig/rig";
  * the drawing rather than an effect on top of it.
  *
  * Coordinate system = the 1000x1450 stage used to calibrate the art:
- *   head art  drawn at (222, 40)  scaled 0.625
+ *   head art  drawn at (229, 166) scaled 0.625 — the painted neck tucks
+ *   behind the cardigan collar so no seam is visible
  *   body art  drawn at (100, 500) scale 1
  */
 
-const HEAD_X = 222;
-const HEAD_Y = 40;
+const HEAD_X = 229;
+const HEAD_Y = 166;
 const HEAD_K = 0.625;
 /** head-art local point -> stage point */
 const hx = (x: number) => HEAD_X + x * HEAD_K;
@@ -30,7 +31,7 @@ const EYE_R = { x: hx(545), y: hy(410) };
 const EYE_RX = 40;
 const EYE_RY = 26;
 const MOUTH = { x: hx(457), y: hy(572) };
-const NECK = { x: 500, y: 430 };
+const NECK = { x: 502, y: 566 };
 
 const SKIN = "#fadcc0";
 const SKIN_SHADE = "#eec6a6";
