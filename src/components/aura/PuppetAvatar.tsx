@@ -22,6 +22,8 @@ import { rig } from "@/lib/aura/rig/rig";
 const HEAD_X = 229;
 const HEAD_Y = 166;
 const HEAD_K = 0.625;
+const BODY_X = 100;
+const BODY_Y = 540;
 /** head-art local point -> stage point */
 const hx = (x: number) => HEAD_X + x * HEAD_K;
 const hy = (y: number) => HEAD_Y + y * HEAD_K;
@@ -31,7 +33,9 @@ const EYE_R = { x: hx(545), y: hy(410) };
 const EYE_RX = 40;
 const EYE_RY = 26;
 const MOUTH = { x: hx(457), y: hy(572) };
-const NECK = { x: 502, y: 566 };
+// The artwork's true skeletal joint: centered where the tapered head neck
+// disappears behind the body's collar. Both layers animate around this point.
+const NECK = { x: 502, y: 590 };
 
 const SKIN = "#fadcc0";
 const SKIN_SHADE = "#eec6a6";
@@ -89,7 +93,7 @@ export default function PuppetAvatar() {
       /* body: breath + sway + a faint counter-rotation against the head */
       set(bodyG.current, "transform",
         `translate(${(p.bodySway * 1.2).toFixed(2)} ${(p.breath * 2.2 - p.shoulder * 1.4).toFixed(2)}) ` +
-        `rotate(${(p.headTilt * 0.14).toFixed(3)} ${NECK.x} 900) ` +
+        `rotate(${(p.headTilt * 0.14).toFixed(3)} ${NECK.x} ${NECK.y}) ` +
         `scale(1 ${(1 + p.breath * 0.004).toFixed(4)})`);
 
       /* head: rotates around the neck joint, pushes in/out with intent */
@@ -210,7 +214,7 @@ export default function PuppetAvatar() {
         </g>
 
         <g ref={bodyG}>
-          <image href={bodyArt} x={100} y={500} width={803} height={927} />
+          <image href={bodyArt} x={BODY_X} y={BODY_Y} width={803} height={927} />
         </g>
       </g>
     </svg>
